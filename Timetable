@@ -1,0 +1,510 @@
+import React, { useState, useEffect } from 'react';
+import { 
+  Calendar, MapPin, Clock, AlignLeft, Bell, Plus, 
+  LogOut, User, Trash2, AlertCircle, CalendarDays, Loader2
+} from 'lucide-react';
+import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js/+esm';
+
+// Initialisation de Supabase avec vos clés
+const supabaseUrl = 'https://gctmgilfchthxekyblky.supabase.co';
+const supabaseKey = 'sb_publishable_NZ9N-K_mOD6yrBpU9pitkg_F58SjDzV';
+const supabase = createClient(supabaseUrl, supabaseKey);
+
+export default function App() {
+  const [session, setSession] = useState(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    // Vérifier la session active au chargement
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setSession(session);
+      setLoading(false);
+    });
+
+    // Écouter les changements d'authentification
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_event, session) => {
+      setSession(session);
+    });
+
+    return () => subscription.unsubscribe();
+  }, []);
+
+  if (loading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-slate-50">
+        <Loader2 className="w-8 h-8 animate-spin text-indigo-600" />
+      </div>
+    );
+  }
+
+  return (
+    <div className="min-h-screen bg-slate-50 text-slate-900 font-sans">
+      {!session ? <AuthPage /> : <Dashboard session={session} />}
+    </div>
+  );
+}
+
+// ==========================================
+// PAGE D'AUTHENTIFICATION
+// ==========================================
+function AuthPage() {
+  const [isLogin, setIsLogin] = useState(true);
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
+
+  const handleAuth = async (e) => {
+    e.preventDefault();
+    setLoading(true);
+    setError(null);
+
+    // Astuce : Supabase demande un email, on transforme le pseudo en email fictif
+    const email = `${username.trim().toLowerCase()}@lucid.com`;
+
+    try {
+      if (isLogin) {
+        const { error } = await supabase.auth.signInWithPassword({ email, password });
+        if (error) throw error;
+      } else {
+        const { error } = await supabase.auth.signUp({
+          email,
+          password,
+          options: {
+            data: { username: username.trim() }
+          }
+        });
+        if (error) throw error;
+        // Auto-login ou message de succès
+        alert("Compte créé avec succès ! Vous pouvez maintenant ajouter des événements.");
+      }
+    } catch (err) {
+      setError(err.message === 'Invalid login credentials' 
+        ? 'Identifiants incorrects. Avez-vous créé le compte ?' 
+        : err.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="flex flex-col items-center justify-center min-h-screen p-4">
+      <div className="w-full max-w-md bg-white rounded-2xl shadow-xl overflow-hidden">
+        <div className="bg-indigo-600 p-8 text-center text-white">
+          <CalendarDays className="w-16 h-16 mx-auto mb-4 opacity-90" />
+          <h1 className="text-3xl font-bold tracking-tight">Lucid Timetable</h1>
+          <p className="text-indigo-200 mt-2 text-sm">Organisez votre équipe simplement</p>
+        </div>
+        
+        <form onSubmit={handleAuth} className="p-8 space-y-6">
+          {error && (
+            <div className="bg-red-50 text-red-600 p-3 rounded-lg text-sm flex items-center gap-2">
+              <AlertCircle className="w-4 h-4 shrink-0" />
+              <p>{error}</p>
+            </div>
+          )}
+
+          <div>
+            <label className="block text-sm font-medium text-slate-700 mb-1">Pseudo</label>
+            <input
+              type="text"
+              required
+              value={username}
+              onChange={(e) => setUsername(e.target.value)}
+              placeholder="ex: ClemBO, Lucasghdt..."
+              className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 transition-colors"
+            />
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-slate-700 mb-1">Mot de passe</label>
+            <input
+              type="password"
+              required
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              placeholder="Votre mot de passe (ex: Lucid1)"
+              className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 transition-colors"
+            />
+          </div>
+
+          <button
+            type="submit"
+            disabled={loading}
+            className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-semibold py-2.5 rounded-lg transition-colors flex items-center justify-center gap-2 disabled:opacity-70"
+          >
+            {loading ? <Loader2 className="w-5 h-5 animate-spin" /> : (isLogin ? 'Se connecter' : 'Créer le compte')}
+          </button>
+
+          <p className="text-center text-sm text-slate-500 mt-4">
+            {isLogin ? "Pas encore de compte ?" : "Déjà un compte ?"}
+            <button
+              type="button"
+              onClick={() => setIsLogin(!isLogin)}
+              className="ml-1 text-indigo-600 font-medium hover:underline"
+            >
+              {isLogin ? "S'inscrire" : "Se connecter"}
+            </button>
+          </p>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+// ==========================================
+// TABLEAU DE BORD PRINCIPAL
+// ==========================================
+function Dashboard({ session }) {
+  const [events, setEvents] = useState([]);
+  const [showModal, setShowModal] = useState(false);
+  const [dbError, setDbError] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const username = session.user.user_metadata?.username || session.user.email.split('@')[0];
+
+  const fetchEvents = async () => {
+    try {
+      const { data, error } = await supabase
+        .from('events')
+        .select('*')
+        .order('date', { ascending: true })
+        .order('time', { ascending: true });
+
+      if (error) throw error;
+      setEvents(data || []);
+      setDbError(false);
+    } catch (err) {
+      console.error("Erreur de récupération:", err);
+      // Si la table n'existe pas ou erreur de permissions
+      setDbError(true);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchEvents();
+  }, []);
+
+  const handleLogout = () => supabase.auth.signOut();
+
+  const deleteEvent = async (id) => {
+    if(!window.confirm("Voulez-vous vraiment supprimer cet événement ?")) return;
+    try {
+      const { error } = await supabase.from('events').delete().eq('id', id);
+      if (error) throw error;
+      setEvents(events.filter(e => e.id !== id));
+    } catch (err) {
+      alert("Erreur lors de la suppression. Vous ne pouvez supprimer que vos propres événements.");
+    }
+  };
+
+  return (
+    <div className="max-w-5xl mx-auto p-4 md:p-6">
+      {/* Header */}
+      <header className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-8 bg-white p-4 md:p-6 rounded-2xl shadow-sm border border-slate-100">
+        <div className="flex items-center gap-3">
+          <div className="bg-indigo-100 p-3 rounded-xl text-indigo-600">
+            <CalendarDays className="w-6 h-6" />
+          </div>
+          <div>
+            <h1 className="text-2xl font-bold text-slate-800">Lucid Timetable</h1>
+            <p className="text-slate-500 text-sm flex items-center gap-1">
+              <User className="w-4 h-4" /> Connecté en tant que <strong>{username}</strong>
+            </p>
+          </div>
+        </div>
+        <div className="flex items-center gap-3">
+          <button
+            onClick={() => setShowModal(true)}
+            className="flex-1 md:flex-none bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2.5 rounded-lg font-medium transition-colors flex items-center justify-center gap-2"
+          >
+            <Plus className="w-5 h-5" />
+            <span>Ajouter</span>
+          </button>
+          <button
+            onClick={handleLogout}
+            className="p-2.5 text-slate-500 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors border border-slate-200"
+            title="Se déconnecter"
+          >
+            <LogOut className="w-5 h-5" />
+          </button>
+        </div>
+      </header>
+
+      {/* Database Error Warning */}
+      {dbError && (
+        <div className="mb-8 p-6 bg-amber-50 border border-amber-200 rounded-xl text-amber-800 shadow-sm">
+          <h2 className="font-bold text-lg mb-2 flex items-center gap-2">
+            <AlertCircle className="w-5 h-5" /> Configuration requise
+          </h2>
+          <p className="mb-4">Il semble que la table <strong>events</strong> n'existe pas encore dans votre base de données Supabase ou qu'il y a un problème de permissions.</p>
+          <p className="font-medium mb-2">Veuillez exécuter ce code SQL dans votre éditeur SQL Supabase :</p>
+          <pre className="bg-amber-900/10 p-4 rounded-lg text-xs md:text-sm overflow-x-auto whitespace-pre-wrap">
+{`create table public.events (
+  id uuid default gen_random_uuid() primary key,
+  created_at timestamp with time zone default timezone('utc'::text, now()) not null,
+  user_id uuid references auth.users not null,
+  author_name text not null,
+  title text not null,
+  date date not null,
+  time time without time zone,
+  description text,
+  location text,
+  reminder text
+);
+alter table public.events enable row level security;
+create policy "Tous les utilisateurs peuvent voir les évènements" on public.events for select using (true);
+create policy "Les utilisateurs authentifiés peuvent ajouter" on public.events for insert with check (auth.uid() = user_id);
+create policy "Les utilisateurs peuvent supprimer" on public.events for delete using (auth.uid() = user_id);`}
+          </pre>
+        </div>
+      )}
+
+      {/* Events List */}
+      {!dbError && (
+        <div className="space-y-4">
+          <h2 className="text-xl font-semibold text-slate-800 mb-4 px-2">Événements à venir</h2>
+          
+          {loading ? (
+            <div className="text-center py-12">
+              <Loader2 className="w-8 h-8 animate-spin text-indigo-400 mx-auto" />
+            </div>
+          ) : events.length === 0 ? (
+            <div className="text-center py-16 bg-white rounded-2xl border border-dashed border-slate-300">
+              <Calendar className="w-12 h-12 text-slate-300 mx-auto mb-3" />
+              <h3 className="text-lg font-medium text-slate-600">Aucun événement prévu</h3>
+              <p className="text-slate-400 mt-1">Ajoutez un événement pour commencer à organiser l'emploi du temps.</p>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {events.map((ev) => (
+                <div key={ev.id} className="bg-white p-5 rounded-2xl shadow-sm border border-slate-100 hover:shadow-md transition-shadow relative group">
+                  <div className="absolute top-4 right-4 flex gap-2 opacity-100 md:opacity-0 group-hover:opacity-100 transition-opacity">
+                    {(session.user.id === ev.user_id) && (
+                      <button onClick={() => deleteEvent(ev.id)} className="p-1.5 text-slate-400 hover:text-red-500 bg-white hover:bg-red-50 rounded-md transition-colors">
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    )}
+                  </div>
+
+                  <div className="flex items-start gap-4">
+                    <div className="bg-indigo-50 border border-indigo-100 rounded-xl p-3 text-center min-w-[64px]">
+                      <span className="block text-xs font-bold text-indigo-400 uppercase">
+                        {new Date(ev.date).toLocaleDateString('fr-FR', { month: 'short' })}
+                      </span>
+                      <span className="block text-xl font-black text-indigo-700 leading-none mt-1">
+                        {new Date(ev.date).getDate()}
+                      </span>
+                    </div>
+                    
+                    <div className="flex-1 min-w-0">
+                      <h3 className="text-lg font-bold text-slate-800 truncate pr-8">{ev.title}</h3>
+                      <div className="mt-2 space-y-1.5 text-sm text-slate-600">
+                        {ev.time && (
+                          <p className="flex items-center gap-2"><Clock className="w-4 h-4 text-slate-400" /> {ev.time.slice(0, 5)}</p>
+                        )}
+                        {ev.location && (
+                          <p className="flex items-center gap-2"><MapPin className="w-4 h-4 text-slate-400" /> {ev.location}</p>
+                        )}
+                        {ev.reminder && (
+                          <p className="flex items-center gap-2 text-amber-600"><Bell className="w-4 h-4" /> Rappel : {ev.reminder}</p>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+
+                  {ev.description && (
+                    <div className="mt-4 pt-4 border-t border-slate-100 text-sm text-slate-600">
+                      <p className="flex items-start gap-2">
+                        <AlignLeft className="w-4 h-4 text-slate-400 mt-0.5 shrink-0" />
+                        <span className="whitespace-pre-wrap">{ev.description}</span>
+                      </p>
+                    </div>
+                  )}
+
+                  <div className="mt-4 flex items-center gap-2 text-xs font-medium text-slate-400">
+                    <div className="w-5 h-5 rounded-full bg-slate-200 flex items-center justify-center text-slate-600">
+                      {ev.author_name.charAt(0).toUpperCase()}
+                    </div>
+                    Ajouté par {ev.author_name}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Modal Ajout */}
+      {showModal && (
+        <AddEventModal 
+          session={session} 
+          onClose={() => setShowModal(false)} 
+          onSuccess={() => {
+            setShowModal(false);
+            fetchEvents();
+          }} 
+        />
+      )}
+    </div>
+  );
+}
+
+// ==========================================
+// MODAL D'AJOUT D'ÉVÉNEMENT
+// ==========================================
+function AddEventModal({ session, onClose, onSuccess }) {
+  const [loading, setLoading] = useState(false);
+  const [formData, setFormData] = useState({
+    title: '',
+    date: '',
+    time: '',
+    location: '',
+    reminder: '1 heure avant',
+    description: ''
+  });
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    setLoading(true);
+
+    try {
+      const { error } = await supabase.from('events').insert([
+        {
+          user_id: session.user.id,
+          author_name: session.user.user_metadata?.username || session.user.email.split('@')[0],
+          title: formData.title,
+          date: formData.date,
+          time: formData.time || null,
+          location: formData.location,
+          reminder: formData.reminder,
+          description: formData.description
+        }
+      ]);
+
+      if (error) throw error;
+      onSuccess();
+    } catch (err) {
+      alert("Erreur lors de l'ajout : " + err.message);
+      console.error(err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleChange = (e) => setFormData({ ...formData, [e.target.name]: e.target.value });
+
+  return (
+    <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+      <div className="bg-white rounded-2xl shadow-xl w-full max-w-lg max-h-[90vh] overflow-y-auto">
+        <div className="p-6 border-b border-slate-100 flex items-center justify-between sticky top-0 bg-white/90 backdrop-blur z-10">
+          <h2 className="text-xl font-bold text-slate-800">Ajouter au planning</h2>
+          <button onClick={onClose} className="text-slate-400 hover:text-slate-600 p-1">✕</button>
+        </div>
+
+        <form onSubmit={handleSubmit} className="p-6 space-y-5">
+          <div>
+            <label className="block text-sm font-medium text-slate-700 mb-1">Titre de l'événement *</label>
+            <input
+              required
+              name="title"
+              value={formData.title}
+              onChange={handleChange}
+              placeholder="ex: Réunion projet, Soirée, RDV..."
+              className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none"
+            />
+          </div>
+
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-1">Date *</label>
+              <input
+                type="date"
+                required
+                name="date"
+                value={formData.date}
+                onChange={handleChange}
+                className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-1">Heure</label>
+              <input
+                type="time"
+                name="time"
+                value={formData.time}
+                onChange={handleChange}
+                className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none"
+              />
+            </div>
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-slate-700 mb-1">Lieu</label>
+            <div className="relative">
+              <MapPin className="w-5 h-5 text-slate-400 absolute left-3 top-2.5" />
+              <input
+                name="location"
+                value={formData.location}
+                onChange={handleChange}
+                placeholder="Où cela se passe-t-il ?"
+                className="w-full pl-10 pr-4 py-2 bg-slate-50 border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none"
+              />
+            </div>
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-slate-700 mb-1">Rappel personnalisé</label>
+            <div className="relative">
+              <Bell className="w-5 h-5 text-slate-400 absolute left-3 top-2.5" />
+              <select
+                name="reminder"
+                value={formData.reminder}
+                onChange={handleChange}
+                className="w-full pl-10 pr-4 py-2 bg-slate-50 border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none"
+              >
+                <option value="Pas de rappel">Pas de rappel</option>
+                <option value="15 minutes avant">15 minutes avant</option>
+                <option value="1 heure avant">1 heure avant</option>
+                <option value="1 jour avant">1 jour avant</option>
+              </select>
+            </div>
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-slate-700 mb-1">Description / Infos</label>
+            <textarea
+              name="description"
+              value={formData.description}
+              onChange={handleChange}
+              rows="3"
+              placeholder="Détails supplémentaires, liens, notes pour l'équipe..."
+              className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none resize-none"
+            ></textarea>
+          </div>
+
+          <div className="pt-4 flex gap-3">
+            <button
+              type="button"
+              onClick={onClose}
+              className="flex-1 px-4 py-2.5 border border-slate-200 text-slate-600 rounded-lg hover:bg-slate-50 font-medium transition-colors"
+            >
+              Annuler
+            </button>
+            <button
+              type="submit"
+              disabled={loading}
+              className="flex-1 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg font-medium transition-colors flex items-center justify-center gap-2 disabled:opacity-70"
+            >
+              {loading ? <Loader2 className="w-5 h-5 animate-spin" /> : 'Enregistrer'}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
